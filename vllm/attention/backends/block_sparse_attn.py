@@ -194,7 +194,7 @@ class BlockSparseImpl(AttentionImpl):
             sparse_fn.local_tokens >= attn_metadata.max_context_len or
             attn_metadata.block_tables.dim() == 3):
             return
-        print("++++++++++++build mask+++++++++++++++++++++++++++++++++")
+        
         sparse_pattern = sparse_fn.sparse_pattern.cpu()
         max_context_block = 0
         sparse_block_tables = []
@@ -490,6 +490,7 @@ class BlockSparseImpl(AttentionImpl):
             value: shape = [num_prompt_tokens, num_kv_heads, head_size]
             attn_metadata: Metadata for attention.
         """
+        #print("++++++++++++++++++++bs forward++++++++++++++++++++++++++++++++++++++")
         seq_len = query.shape[0]
         query = query.view(1, seq_len, self.num_heads, -1)
         key = key.reshape(1, seq_len, self.num_heads, -1)

@@ -207,10 +207,15 @@ __device__ void paged_attention_kernel(
   // const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
   const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq+(head_idx*sparse_head_stride);
   // for a head, iterate through the kv blocks. The block here are pages.
+
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
+    //check if block_idx needs to be processed or not, compare blockid*blocksize vs context len
+    // if < local, go
+    // if % stride, add 
+    // if not stride and not local, skip
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
 
     // Load a key to registers.
@@ -342,6 +347,7 @@ __device__ void paged_attention_kernel(
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
+    //add sparse skip, if vert stride or local
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
     const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
