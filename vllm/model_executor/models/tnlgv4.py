@@ -5,6 +5,8 @@ import torch
 from torch import nn
 
 from vllm.attention import Attention, AttentionMetadata
+from vllm.core.block_manager_v1 import BlockSpaceManagerV1
+from vllm.core.scheduler import global_block_manager
 from vllm.model_executor.layers.linear import (LinearMethodBase,
                                                MergedColumnParallelLinear,
                                                QKVParallelLinear,
@@ -135,11 +137,20 @@ class TLGv4SelfAttention(nn.Module):
         self.blocksparse_num_local_blocks = config.blocksparse_num_local_blocks
         self.sliding_window = self.blocksparse_block_size * self.blocksparse_num_local_blocks
         
+        self.blocksparse_vert_stride = config.blocksparse_vert_stride
+        
+        is_sparse = True
         self.attn = Attention(self.num_heads,
                               self.head_dim,
                               norm_factor,
-                              num_kv_heads=self.num_kv_heads)
+                              num_kv_heads=self.num_kv_heads,
+                              sliding_window=self.sliding_window,
+                              selector_conf={"is_msft_backend": False, "is_sparse": is_sparse})
+        is_sparse is True and self.attn.impl.build_sparse_op(config)
 
+    def set_global_block_manager(self):
+        self.block_manager = global_block_manager
+    
     def forward(
         self,
         positions: torch.Tensor,
@@ -159,7 +170,10 @@ class TLGv4SelfAttention(nn.Module):
         k = k.reshape(-1, self.head_dim*self.num_kv_heads)
         v = v.reshape(-1, self.head_dim*self.num_kv_heads)
         q, k = self.rotary_emb(positions, q, k)
+        
         attn_output = self.attn(q, k, v, kv_cache, attn_metadata=attn_metadata)
+        
+        #self.block_manager.evict()
         output, _ = self.dense(attn_output)
         return output
 
@@ -280,6 +294,10 @@ class TLGv4ForCausalLM(nn.Module):
 
     def get_decoder(self):
         return self.model
+    
+    def set_global_block_manager(self):
+        self.set_block_manager = global_block_manager
+        return 
 
     def compute_logits(self, hidden_states: torch.Tensor,
                        sampling_metadata: SamplingMetadata) -> torch.Tensor:
@@ -305,7 +323,9 @@ class TLGv4ForCausalLM(nn.Module):
     ) -> Optional[SamplerOutput]:
         next_tokens = self.sampler(logits / self.mup_width_multiplier, sampling_metadata)
         return next_tokens
-
+    
+    def hello(self):
+        print("++++++++++++++++hello world++++++++++++++++++")
 
     def load_weights(self,
                      model_name_or_path: str,

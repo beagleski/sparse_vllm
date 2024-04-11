@@ -110,16 +110,12 @@ __device__ void paged_attention_kernel(
   const int q_stride,
   const int kv_block_stride,
   const int kv_head_stride,
-  const int sparse_head_stride,
   const float kv_scale) {
   const int seq_idx = blockIdx.y;
   const int partition_idx = blockIdx.z;
   const int max_num_partitions = gridDim.z;
   constexpr bool USE_PARTITIONING = PARTITION_SIZE > 0;
-  // const int context_len = context_lens[seq_idx];
-  const int head_idx = blockIdx.x;
-  const int num_heads = gridDim.x;
-  const int context_len = *(context_lens + (sparse_head_stride > 0 ? seq_idx * num_heads + head_idx : seq_idx));
+  const int context_len = context_lens[seq_idx];
   if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= context_len) {
     // No work to do. Terminate the thread block.
     return;
@@ -147,8 +143,6 @@ __device__ void paged_attention_kernel(
   const int warp_idx = thread_idx / WARP_SIZE;
   const int lane = thread_idx % WARP_SIZE;
 
-  //each query head is assigned to an SM, the SM will scan all the stored kv in blocktable
-  //we can use stride to skip unnecessary blocks for each head in blocksparse 
   const int head_idx = blockIdx.x;
   const int num_heads = gridDim.x;
   const int num_queries_per_kv = num_heads / num_kv_heads;
@@ -204,9 +198,7 @@ __device__ void paged_attention_kernel(
   // Each warp fetches a block of keys for each iteration.
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
-  // const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
-  const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq+(head_idx*sparse_head_stride);
-  // for a head, iterate through the kv blocks. The block here are pages.
+  const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
@@ -471,12 +463,11 @@ __global__ void paged_attention_v1_kernel(
   const int q_stride,
   const int kv_block_stride,
   const int kv_head_stride,
-  const int sparse_head_stride,
   const float kv_scale) {
   paged_attention_kernel<scalar_t, cache_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, IS_FP8_KV_CACHE>(
     /* exp_sums */ nullptr, /* max_logits */ nullptr,
     out, q, k_cache, v_cache, num_kv_heads, scale, block_tables, context_lens,
-    max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride, kv_head_stride, sparse_head_stride, kv_scale);
+    max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride, kv_head_stride, kv_scale);
 }
 
 // Grid: (num_heads, num_seqs, max_num_partitions).
@@ -504,12 +495,11 @@ __global__ void paged_attention_v2_kernel(
   const int q_stride,
   const int kv_block_stride,
   const int kv_head_stride,
-  const int sparse_head_stride,
   const float kv_scale) {
   paged_attention_kernel<scalar_t, cache_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, IS_FP8_KV_CACHE, PARTITION_SIZE>(
     exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_kv_heads, scale,
     block_tables, context_lens, max_num_blocks_per_seq, alibi_slopes,
-    q_stride, kv_block_stride, kv_head_stride, sparse_head_stride, kv_scale);
+    q_stride, kv_block_stride, kv_head_stride, kv_scale);
 }
 
 // Grid: (num_heads, num_seqs).
@@ -529,8 +519,6 @@ __global__ void paged_attention_v2_reduce_kernel(
   const int head_idx = blockIdx.x;
   const int seq_idx = blockIdx.y;
   const int context_len = context_lens[seq_idx];
-  // YUnan: not sure if we need to change context_lens here
-  // const int context_len =*(context_lens +(sparse_head_stride > 0 ? seq_idx * num_heads + head_idx : seq_idx));
   const int num_partitions = DIVIDE_ROUND_UP(context_len, PARTITION_SIZE);
   if (num_partitions == 1) {
     // No need to reduce. Only copy tmp_out to out.
@@ -634,7 +622,6 @@ __global__ void paged_attention_v2_reduce_kernel(
     q_stride,                                                                                 \
     kv_block_stride,                                                                          \
     kv_head_stride,                                                                           \
-    sparse_head_stride,                                                                       \
     kv_scale);
 
 // TODO(woosuk): Tune NUM_THREADS.
@@ -659,9 +646,7 @@ void paged_attention_v1_launcher(
   int num_seqs = query.size(0);
   int num_heads = query.size(1);
   int head_size = query.size(2);
-  // int max_num_blocks_per_seq = block_tables.size(1);
-  int max_num_blocks_per_seq = block_tables.stride(0);
-  int sparse_head_stride = block_tables.dim() == 3 ? block_tables.stride(1) : 0;
+  int max_num_blocks_per_seq = block_tables.size(1);
   int q_stride = query.stride(0);
   int kv_block_stride = key_cache.stride(0);
   int kv_head_stride = key_cache.stride(1);
@@ -811,7 +796,6 @@ void paged_attention_v1(
     q_stride,                                                                                 \
     kv_block_stride,                                                                          \
     kv_head_stride,                                                                           \
-    sparse_head_stride,                                                                       \
     kv_scale);                                                                                \
   vllm::paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS, PARTITION_SIZE>           \
   <<<reduce_grid, block, reduce_shared_mem_size, stream>>>(                                   \
@@ -847,9 +831,7 @@ void paged_attention_v2_launcher(
   int num_seqs = query.size(0);
   int num_heads = query.size(1);
   int head_size = query.size(2);
-  // int max_num_blocks_per_seq = block_tables.size(1);
-  int max_num_blocks_per_seq = block_tables.stride(0);
-  int sparse_head_stride = block_tables.dim() == 3 ? block_tables.stride(1) : 0;
+  int max_num_blocks_per_seq = block_tables.size(1);
   int q_stride = query.stride(0);
   int kv_block_stride = key_cache.stride(0);
   int kv_head_stride = key_cache.stride(1);

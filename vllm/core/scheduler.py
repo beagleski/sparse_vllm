@@ -14,7 +14,8 @@ from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
 from vllm.utils import merge_dicts
 
 logger = init_logger(__name__)
-
+global_block_manager = None
+global_name = "yunan"
 
 class PreemptionMode(enum.Enum):
     """Preemption modes.
@@ -264,6 +265,7 @@ class Scheduler:
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching)
+        global_block_manager = self.block_manager
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.

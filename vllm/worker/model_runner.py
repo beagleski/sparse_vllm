@@ -87,8 +87,12 @@ class ModelRunner:
         self.kv_cache_dtype = kv_cache_dtype
         self.vision_language_config = vision_language_config
 
-        self.attn_backend = get_attn_backend(
-            self.model_config.dtype if model_config is not None else None)
+        # self.attn_backend = get_attn_backend(
+        #     self.model_config.dtype if model_config is not None else None)
+        dtype = self.model_config.dtype if model_config is not None else None
+        is_msft_backend =  False
+        is_sparse = hasattr(self.model_config.hf_config, "blocksparse_block_size")
+        self.attn_backend = get_attn_backend(dtype, is_msft_backend, is_sparse)
 
     def load_model(self) -> None:
         with CudaMemoryProfiler() as m:
@@ -99,6 +103,7 @@ class ModelRunner:
                 vision_language_config=self.vision_language_config,
                 parallel_config=self.parallel_config,
                 scheduler_config=self.scheduler_config)
+        
 
         self.model_memory_usage = m.consumed_memory
         logger.info(f"Loading model weights took "

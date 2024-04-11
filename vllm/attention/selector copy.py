@@ -11,9 +11,8 @@ logger = init_logger(__name__)
 
 
 @lru_cache(maxsize=None)
-def get_attn_backend(dtype: torch.dtype, is_msft_backend:bool=False, is_sparse:bool=True) -> Type[AttentionBackend]:
-    is_msft_backend = is_msft_backend or torch.onnx.is_in_onnx_export()
-    if not is_sparse and not is_msft_backend and _can_use_flash_attn(dtype):
+def get_attn_backend(dtype: torch.dtype) -> Type[AttentionBackend]:
+    if _can_use_flash_attn(dtype):
         logger.info("Using FlashAttention backend.")
         from vllm.attention.backends.flash_attn import (  # noqa: F401
             FlashAttentionBackend)
@@ -22,10 +21,6 @@ def get_attn_backend(dtype: torch.dtype, is_msft_backend:bool=False, is_sparse:b
         logger.info("Using Torch SDPA backend.")
         from vllm.attention.backends.torch_sdpa import TorchSDPABackend
         return TorchSDPABackend
-    elif is_sparse:
-        logger.info("Using block sparse backend.")
-        from vllm.attention.backends.block_sparse_attn import BlockSparseBackend
-        return BlockSparseBackend
     else:
         logger.info("Using XFormers backend.")
         from vllm.attention.backends.xformers import (  # noqa: F401

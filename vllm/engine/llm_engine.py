@@ -8,6 +8,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, ModelConfig,
                          ParallelConfig, SchedulerConfig, SpeculativeConfig,
                          VisionLanguageConfig)
 from vllm.core.scheduler import Scheduler, SchedulerOutputs
+from vllm.core.scheduler import global_block_manager, global_name
 from vllm.engine.arg_utils import EngineArgs
 from vllm.engine.metrics import StatLogger, Stats
 from vllm.engine.ray_utils import initialize_ray_cluster
