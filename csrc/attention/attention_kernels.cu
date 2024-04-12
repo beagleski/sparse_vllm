@@ -131,6 +131,7 @@ __device__ void paged_attention_kernel(
   const int start_block_idx = USE_PARTITIONING ? partition_idx * num_blocks_per_partition : 0;
   const int end_block_idx = MIN(start_block_idx + num_blocks_per_partition, num_context_blocks);
   const int num_blocks = end_block_idx - start_block_idx;
+  // printf("======parition_id: %d; num_blocks:%d; context_len: %d, num_context_blocks: %d,start_block_idx:%d \n",partition_idx,num_blocks,context_len,num_context_blocks,start_block_idx);
 
   // [start_token_idx, end_token_idx) is the range of tokens to process.
   const int start_token_idx = start_block_idx * BLOCK_SIZE;
@@ -203,8 +204,11 @@ __device__ void paged_attention_kernel(
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
   const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
-  const bool num_blocksparse_blocks = num_blocks / 4;
-  const bool is_sparse = true || (num_blocksparse_blocks > blocksparse_local_blocks);
+  const int num_blocksparse_blocks = num_context_blocks / 4;
+  const bool is_sparse =  (num_blocksparse_blocks > blocksparse_local_blocks);
+  if (is_sparse) {
+    printf("========is sparse=========\n");
+  }
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
@@ -214,7 +218,6 @@ __device__ void paged_attention_kernel(
       if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
         continue;
       }
-
     }
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
 
@@ -349,10 +352,9 @@ __device__ void paged_attention_kernel(
     // (e.g., kv_block_stride).
     if (is_sparse) {
       int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
-      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride ==0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
+      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
         continue;
       }
-
     }
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
