@@ -120,7 +120,10 @@ __device__ void paged_attention_kernel(
     // No work to do. Terminate the thread block.
     return;
   }
-
+  
+  const int blocksparse_local_blocks = 16;
+  const int blocksparse_vert_stride = 4;
+  const int blocksparse_block_size = 64;
   const int num_context_blocks = DIVIDE_ROUND_UP(context_len, BLOCK_SIZE);
   const int num_blocks_per_partition = USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE : num_context_blocks;
 
@@ -145,6 +148,7 @@ __device__ void paged_attention_kernel(
 
   const int head_idx = blockIdx.x;
   const int num_heads = gridDim.x;
+  const int blocksparse_head_sliding_step = MAX(1, (blocksparse_vert_stride/num_heads));
   const int num_queries_per_kv = num_heads / num_kv_heads;
   const int kv_head_idx = head_idx / num_queries_per_kv;
   const float alibi_slope = alibi_slopes == nullptr ? 0.f : alibi_slopes[head_idx];
@@ -199,10 +203,19 @@ __device__ void paged_attention_kernel(
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
   const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
+  const bool num_blocksparse_blocks = num_blocks / 4;
+  const bool is_sparse = true || (num_blocksparse_blocks > blocksparse_local_blocks);
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
+    if (is_sparse) {
+      int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
+      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
+        continue;
+      }
+
+    }
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
 
     // Load a key to registers.
@@ -334,6 +347,13 @@ __device__ void paged_attention_kernel(
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
+    if (is_sparse) {
+      int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
+      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride ==0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
+        continue;
+      }
+
+    }
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
     const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
