@@ -204,18 +204,16 @@ __device__ void paged_attention_kernel(
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
   const int* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
-  const int num_blocksparse_blocks = num_context_blocks / 4;
+  const int num_blocksparse_blocks = DIVIDE_ROUND_UP(num_context_blocks,4);
   const bool is_sparse =  (num_blocksparse_blocks > blocksparse_local_blocks);
-  if (is_sparse) {
-    printf("========is sparse=========\n");
-  }
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
     // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
     if (is_sparse) {
-      int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
+      int block_seq_id = DIVIDE_ROUND_UP(block_idx * BLOCK_SIZE, blocksparse_block_size);
       if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
+        //printf("=========skip block_idx: %d, block_seq_id: %d, num_blocksparse_blocks: %d num_context_blocks: %d \n", block_idx, block_seq_id, num_blocksparse_blocks, num_context_blocks);
         continue;
       }
     }
@@ -351,7 +349,7 @@ __device__ void paged_attention_kernel(
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
     if (is_sparse) {
-      int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
+      int block_seq_id = DIVIDE_ROUND_UP(block_idx * BLOCK_SIZE, blocksparse_block_size);
       if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
         continue;
       }
