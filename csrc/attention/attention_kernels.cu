@@ -120,9 +120,9 @@ __device__ void paged_attention_kernel(
     // No work to do. Terminate the thread block.
     return;
   }
-  
+
   const int blocksparse_local_blocks = 16;
-  const int blocksparse_vert_stride = 4;
+  const int blocksparse_vert_stride = 8;
   const int blocksparse_block_size = 64;
   const int num_context_blocks = DIVIDE_ROUND_UP(context_len, BLOCK_SIZE);
   const int num_blocks_per_partition = USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE : num_context_blocks;
@@ -220,11 +220,22 @@ __device__ void paged_attention_kernel(
       const bool is_remote = (local_judge == 0);
       const int left_bound =  num_blocksparse_blocks - blocksparse_local_blocks;
       const bool within_left = (block_seq_id >= left_bound);
-      const bool within_right = (block_seq_id < num_blocksparse_blocks);
-      const bool is_local = within_left && within_right;
+      // const bool within_right = (block_seq_id < num_blocksparse_blocks);
+      const bool is_local = within_left; // && within_right;
       if (!is_remote && !is_local) {
-        printf("=========skip block_idx: %d, block_seq_id: %d, num_blocksparse_blocks: %d, num_context_blocks: %d, head_idx: %d, context_len: %d, local_mult: %d, local_sum: %d, local_exp: %d, local_exp_mod: %d, \n", block_idx, block_seq_id, num_blocksparse_blocks, num_context_blocks, head_idx, context_len, local_mult, local_sum, local_exp, local_judge);
-        continue;
+      // if (!is_local) {
+        for (int i = 0; i < NUM_TOKENS_PER_THREAD_GROUP; i++) {
+          const int physical_block_offset = (thread_group_idx + i * WARP_SIZE) % BLOCK_SIZE;
+          const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
+
+          if (thread_group_offset == 0) {
+            // Store the partial reductions to shared memory.
+            // NOTE(woosuk): It is required to zero out the masked logits.
+            logits[token_idx - start_token_idx] = -FLT_MAX;
+            // printf("=========skip block_idx: %d, block_seq_id: %d, num_blocksparse_blocks: %d, num_context_blocks: %d, head_idx: %d, context_len: %d, local_mult: %d, local_sum: %d, local_exp: %d, local_exp_mod: %d, \n", block_idx, block_seq_id, num_blocksparse_blocks, num_context_blocks, head_idx, context_len, local_mult, local_sum, local_exp, local_judge);
+          }
+        }
+      continue;
       }
     }
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
@@ -307,6 +318,8 @@ __device__ void paged_attention_kernel(
   // Get the sum of the exp values.
   float exp_sum = 0.f;
   for (int i = thread_idx; i < num_tokens; i += NUM_THREADS) {
+
+
     float val = __expf(logits[i] - qk_max);
     logits[i] = val;
     exp_sum += val;
@@ -359,8 +372,8 @@ __device__ void paged_attention_kernel(
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
     if (is_sparse) {
-      int block_seq_id = DIVIDE_ROUND_UP(block_idx * BLOCK_SIZE, blocksparse_block_size);
-      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks)&&(block_seq_id < num_blocksparse_blocks))) {
+      int block_seq_id = block_idx * BLOCK_SIZE / blocksparse_block_size;
+      if (!((block_seq_id + head_idx * blocksparse_head_sliding_step + 1) % blocksparse_vert_stride == 0) && !((block_seq_id >= num_blocksparse_blocks - blocksparse_local_blocks))) {
         continue;
       }
     }
