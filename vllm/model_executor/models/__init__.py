@@ -53,6 +53,7 @@ _MODELS = {
     "StableLmForCausalLM": ("stablelm", "StablelmForCausalLM"),
     "Starcoder2ForCausalLM": ("starcoder2", "Starcoder2ForCausalLM"),
     "XverseForCausalLM": ("xverse", "XverseForCausalLM"),
+    "Phi3SmallForCausalLM": ("phi3small", "Phi3SmallForCausalLM"),
 }
 
 # Architecture -> type.
